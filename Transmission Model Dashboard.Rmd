@@ -1,0 +1,218 @@
+---
+title: "Transmission model simulation"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    source_code: embed
+    theme: united
+runtime: shiny
+---
+
+```{r global, include=FALSE, warning=F, message=F}
+# load data in 'global' chunk so it can be shared by all users of the dashboard
+library(ggplot2)
+library(DiagrammeR)
+library(plotly)
+library(deSolve)
+library(shinyWidgets)
+colorsset <- c("lightsteelblue", "indianred4", "slateblue1")
+```
+
+## Inputs {.sidebar}
+
+This dashboard simulates the progression of a disease in a population using a **S**usceptible-**I**nfected-**R**ecovered-**S**usceptible deterministic ordinary differential equation model. Adjust the parameters below based on literature, prior knowledge, or data.
+
+
+```{r}
+sliderInput("input_prev", "Initial prevalence:", value = .01, min = .01, max = 1, step = .1)
+
+sliderInput("input_trans", "Transmission probability:", value = .01, min = 0, max = 1, step = .1)
+
+numericInput("input_reco", "Infection duration (weeks):", value = 1, min = 0)
+
+numericInput("input_wane", "Waning immunity (weeks immune):", value = 2, min = 0)
+
+# selectInput(inputId = "vax_age", label = "Age group(s) to vaccinate:",
+#                   choices = list("None"=1, "Youth (0-18)"=2, "Adults (19-64)"=3, "Older adults (65+)"=4),
+#                   selected=1, multiple = T)
+
+pickerInput("vax_age",
+            "Age group(s) to vaccinate:",
+            choices =  c("None"=1, "Youth (0-18)"=2, "Adults (19-64)"=3, "Older adults (65+)"=4),
+            multiple = TRUE,
+            selected = 1,
+            options = list(
+                  title = "Select variables",
+                  `actions-box` = TRUE,
+                  `deselect-all-text` = "Remove"
+                ))
+
+sliderInput("input_vax", "Vaccine uptake (proportion of susceptibles vaccinated each week):", value = 0, min = 0, max = 1, step = .1)
+```
+
+Column
+-------------------------------------
+### Compartments over time
+```{r}
+reactiveData <- reactive({
+
+  # Define the parameters !!To have the timestep be a day, will multiply the week values by 7
+  prev <- input$input_prev
+  trans <- input$input_trans
+  reco <-  1/(input$input_reco*7)
+  wane <- 1/(input$input_wane*7)
+  vax <- input$input_vax/7 # divide since this is proportion per week
+  age <- input$vax_age
+  
+  if(!is.null(age)){
+    age_dist_df <- data.frame(grp= 1:4, prop = c(0, .221, .614, .165)) # distribution of population taken from Census 2022
+    vax_prop <- sum(age_dist_df[unlist(age), "prop"])
+  } else {
+    vax_prop = 0
+  }
+  
+  # To simulate targeted vaccination, the proportion vaccinated (vax) is multiplied by the proportion of the population being targeted (vax_age). 
+  vax <- vax*vax_prop
+
+  SIRS <- function(time, current_state, params){
+    
+    with(as.list(c(current_state, params)),{
+      dS <- -(trans*S*I) - vax * S + wane * R
+      dI <- (trans*S*I) - reco*I 
+      dR <- reco*I + vax * S - wane * R
+      
+      return(list(c(dS, dI, dR)))
+    })
+  }
+  
+  params <- c(trans, reco, vax, wane)
+  
+  initial_state <- c(S=1-prev, I=prev, R=0)
+  
+  times <- 0:30 #days
+  
+  dats <- data.frame(ode(initial_state, times, SIRS, params))
+
+  
+  #run again with no vaccination for baseline
+  bSIRS <- function(time, current_state, params){
+    
+    with(as.list(c(current_state, params)),{
+      dS <- -(trans*S*I) + wane * R
+      dI <- (trans*S*I) - reco*I 
+      dR <- reco*I - wane * R
+      
+      return(list(c(dS, dI, dR)))
+    })
+  }
+  
+  params <- c(trans, reco, wane)
+  
+  baseline <- ode(initial_state, times, bSIRS, params)
+  
+  dats$base = data.frame(baseline)$I
+  dats
+})
+
+renderPlot({
+    ggplot(reactiveData(), aes(x = time)) +
+      geom_line(aes(y = S, color = "Susceptible"), linewidth = 3) +
+      geom_line(aes(y = I, color = "Infectious"), linewidth = 3) +
+      geom_line(aes(y = R, color = "Recovered/Immune"), linewidth = 3) +
+      xlab("Days") +
+      ylab("Proportion") +
+      scale_color_manual(name = "", values=c(colorsset))+
+      scale_y_continuous(limits = c(0, 1)) +
+      scale_linewidth_manual(name = "") +
+      theme(text = element_text(size = 18))
+})
+```
+
+### New cases without and with vaccination
+
+```{r}
+renderPlot({
+  reactiveData()%>% 
+    mutate("With vaccination" = pmax(diff(c(0, I)), 0),
+              Baseline = pmax(diff(c(0, base)), 0), 
+              index = 1:n()) %>% 
+    pivot_longer(c(Baseline, "With vaccination"))%>%  
+    ggplot(aes(x = time, y = value*100, color = factor(name, labels = c("With vaccination", "Baseline"), levels = c("With vaccination", "Baseline")))) + 
+    geom_line(linewidth = 3) +
+    scale_color_manual(name = "", values=c("lightsteelblue", "steelblue"))+
+    scale_linewidth_manual(name = "")+
+    theme(text = element_text(size = 18)) +
+    labs(y = "Incidence per 100,000", x = "Days")
+})
+ 
+```
+
+Column
+-------------------------------------
+
+### Number of infections without and with vaccination
+
+```{r}
+library(tidyverse)
+# renderPlot({
+#   ggplot(reactiveData() %>% mutate(across(-Time, ~cumsum(.))) %>% pivot_longer(-Time), aes(x = Time)) +
+#       geom_area(aes(y = value, fill = name), position = "stack") +
+#       xlab("Time") +
+#       ylab("People") +
+#       scale_fill_manual(name = "", values=c(colorsset))+
+#       scale_linewidth_manual(name = "") +
+#         theme(text = element_text(size = 18))
+# })
+renderPlot({
+  pdat <- reactiveData() %>% 
+    summarise("With vaccination" = pmax(diff(c(0, I)), 0),
+              Baseline = pmax(diff(c(0, base)), 0), 
+              index = 1:n()) %>%
+    pivot_longer(-index) %>% 
+    group_by(name) %>%
+    summarise(across(everything(), ~sum(.)*100)) 
+  pdat %>% 
+    ggplot(aes(x = name, y = value, fill = name)) + 
+    geom_col(alpha = .8) + 
+    scale_fill_manual(values = c("steelblue", "lightsteelblue")) + 
+    theme(legend.position = "none", 
+          text = element_text(size = 18), 
+          axis.title.x = element_text(color = colorsset[2], face = "bold")) +
+    labs(x = paste0(round(100*abs(diff(pdat$value))/pdat[pdat$name == "Baseline","value"]) ,"% reduction in cases"), y = "Number of infections\nper 100,000")
+})
+```
+
+### Diagram
+
+```{r}
+# Create a new graph
+graph <- create_graph()
+
+# Add nodes for compartments
+graph <- graph %>%
+  add_node("S", label = "Susceptible", node_aes = node_aes(shape = "square", 
+                                                           fillcolor = colorsset[3], fontsize = 5, color = "white")) %>%
+  add_node("I", label = "Infectious", node_aes = node_aes(shape = "square", 
+                                                          fillcolor = colorsset[1], fontsize = 5, color = "white")) %>%
+  add_node("R", label = "Recovered", node_aes = node_aes(shape = "square", 
+                                                         fillcolor = colorsset[2], fontsize = 5, color = "white")) %>% 
+  
+  # Add edges for transitions between compartments
+  add_edge(from="Susceptible", to="Infectious", edge_aes = edge_aes(fontsize = 3, 
+                                                                    label = "Transmission probability")) %>%
+  add_edge(from="Infectious", to="Recovered", edge_aes = edge_aes(fontsize = 3, 
+                                                                  label = "1/Infection duration")) %>% 
+  add_edge(from="Recovered", to="Susceptible", edge_aes = edge_aes(fontsize = 3, 
+                                                                   label = "Waning immunity")) %>% 
+  add_edge(from="Susceptible", to="Recovered", edge_aes = edge_aes(fontsize = 3, 
+                                                                   label = "Vaccine uptake")) 
+
+# Render the graph
+render_graph(graph, layout = "fr", width = 350, height = 350)
+```
+
+### Reproductive number {data-height=125}
+
+$$
+R_{0} = \ \ \ \ \  \ \ \ \ \ \  \ \ \ \ \ \ \alpha\ \ \ \ \ \ \  \ \ \ \ \ *\ \ \ \ \ \ \  \ \ \ \ \  1/\gamma \  \ \ \ \ \ \ \ \ \ \ * \ \ \ \ \ \  \ \ \ \ \ \beta \\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ Contact\ rate \ \ \ \ \ Infection\ duration \ \ \ \ \ \ Transmission\ probability
+$$
