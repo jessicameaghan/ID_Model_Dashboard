@@ -10,7 +10,7 @@ runtime: shiny
 
 ```{r global, include=FALSE, warning=F, message=F}
 # load data in 'global' chunk so it can be shared by all users of the dashboard
-library(ggplot2)
+library(tidyverse)
 library(DiagrammeR)
 library(plotly)
 library(deSolve)
@@ -32,10 +32,6 @@ numericInput("input_reco", "Infection duration (weeks):", value = 1, min = 0)
 
 numericInput("input_wane", "Waning immunity (weeks immune):", value = 2, min = 0)
 
-# selectInput(inputId = "vax_age", label = "Age group(s) to vaccinate:",
-#                   choices = list("None"=1, "Youth (0-18)"=2, "Adults (19-64)"=3, "Older adults (65+)"=4),
-#                   selected=1, multiple = T)
-
 pickerInput("vax_age",
             "Age group(s) to vaccinate:",
             choices =  c("None"=1, "Youth (0-18)"=2, "Adults (19-64)"=3, "Older adults (65+)"=4),
@@ -48,12 +44,17 @@ pickerInput("vax_age",
                 ))
 
 sliderInput("input_vax", "Vaccine uptake (proportion of susceptibles vaccinated each week):", value = 0, min = 0, max = 1, step = .1)
+
+checkboxInput("ui", "Add uncertainty by using ranges of values for transmission probability instead of a fixed value", value = FALSE)
 ```
+
 
 Column
 -------------------------------------
 ### Compartments over time
 ```{r}
+noiz <- .1
+    
 reactiveData <- reactive({
 
   # Define the parameters !!To have the timestep be a day, will multiply the week values by 7
@@ -63,13 +64,11 @@ reactiveData <- reactive({
   wane <- 1/(input$input_wane*7)
   vax <- input$input_vax/7 # divide since this is proportion per week
   age <- input$vax_age
+  ui <- input$ui
   
-  if(!is.null(age)){
-    age_dist_df <- data.frame(grp= 1:4, prop = c(0, .221, .614, .165)) # distribution of population taken from Census 2022
-    vax_prop <- sum(age_dist_df[unlist(age), "prop"])
-  } else {
-    vax_prop = 0
-  }
+  # Setup the proportion vaccinated by age group
+  age_dist_df <- data.frame(grp= 1:4, prop = c(0, .221, .614, .165)) # distribution of population taken from Census 2022
+  vax_prop <- sum(age_dist_df[unlist(age), "prop"])
   
   # To simulate targeted vaccination, the proportion vaccinated (vax) is multiplied by the proportion of the population being targeted (vax_age). 
   vax <- vax*vax_prop
@@ -93,6 +92,24 @@ reactiveData <- reactive({
   
   dats <- data.frame(ode(initial_state, times, SIRS, params))
 
+  # Add random noise if uncertainty is desired - will just add noise to the transmission probability since least likely to be known
+  if(isTRUE(ui)){
+    # Was adding random noise to the parameters and then rerunning but the intervals were crossing over the point estimate and not making sense so simplified
+    # datslow = data.frame(ode(initial_state, times, SIRS, parms = c(trans = pmax(trans - noiz,0), 
+    #                                                                reco = pmax(reco - noiz,0), 
+    #                                                                vax, 
+    #                                                                wane = pmax(wane - noiz,0)))) %>%
+    #   dplyr::rename_with(~ paste0("low_", .))
+    # datshi = data.frame(ode(initial_state, times, SIRS, parms = c(trans = pmin(trans + noiz, 1), 
+    #                                                               reco = pmin(reco + noiz, 1), 
+    #                                                               vax, 
+    #                                                               wane = pmin(wane + noiz, 1)))) %>%
+    #   dplyr::rename_with(~ paste0("hi_", .))
+    # dats <- cbind(dats, datslow, datshi)
+    dats <- dats %>% 
+      mutate(across(c(S, I ,R), ~pmax(. - noiz, 0), .names = "low_{.col}"),
+             across(c(S, I ,R), ~pmin(. + noiz,1), .names = "hi_{.col}"))
+  }
   
   #run again with no vaccination for baseline
   bSIRS <- function(time, current_state, params){
@@ -115,13 +132,21 @@ reactiveData <- reactive({
 })
 
 renderPlot({
-    ggplot(reactiveData(), aes(x = time)) +
+      {if(isTRUE(input$ui)){
+        ggplot(reactiveData(), aes(x = time)) +
+        geom_ribbon(aes(ymin = low_S, ymax = hi_S, fill = "Susceptible"), alpha = .5) +
+        geom_ribbon(aes(ymin = low_I, ymax = hi_I, fill = "Infectious"), alpha = .5) +
+        geom_ribbon(aes(ymin = low_R, ymax = hi_R, fill = "Recovered/Immune"), alpha = .5)
+      } else {
+        ggplot(reactiveData(), aes(x = time))
+      }} +
       geom_line(aes(y = S, color = "Susceptible"), linewidth = 3) +
       geom_line(aes(y = I, color = "Infectious"), linewidth = 3) +
       geom_line(aes(y = R, color = "Recovered/Immune"), linewidth = 3) +
       xlab("Days") +
       ylab("Proportion") +
-      scale_color_manual(name = "", values=c(colorsset))+
+      scale_color_manual(name = "", values=c(colorsset)) +
+      scale_fill_manual(name = "", values=colorsset) + 
       scale_y_continuous(limits = c(0, 1)) +
       scale_linewidth_manual(name = "") +
       theme(text = element_text(size = 18))
@@ -131,15 +156,33 @@ renderPlot({
 ### New cases without and with vaccination
 
 ```{r}
+#make vaccination a difference color!!!
 renderPlot({
   reactiveData()%>% 
     mutate("With vaccination" = pmax(diff(c(0, I)), 0),
-              Baseline = pmax(diff(c(0, base)), 0), 
-              index = 1:n()) %>% 
-    pivot_longer(c(Baseline, "With vaccination"))%>%  
-    ggplot(aes(x = time, y = value*100, color = factor(name, labels = c("With vaccination", "Baseline"), levels = c("With vaccination", "Baseline")))) + 
-    geom_line(linewidth = 3) +
+            Baseline = pmax(diff(c(0, base)), 0), 
+            index = 1:n()) %>% 
+    # {if(isTRUE(input$ui)){
+    #   mutate(., wvaxlo = pmax(diff(c(0, low_I)), 0),
+    #          wvaxhi = pmax(diff(c(0, hi_I)), 0)) %>%
+    #   pivot_longer(c(Baseline, "With vaccination")) %>%
+    #   mutate(wvaxlo = case_when(value < wvaxlo ~ value,
+    #                             TRUE ~ wvaxlo),
+    #          wvaxlo = case_when(name == "Baseline" ~ NA, # for some reason this is only working when done in two separate steps.
+    #                             TRUE ~ wvaxlo),
+    #          wvaxhi = case_when(value > wvaxhi ~ value,
+    #                             TRUE ~ wvaxhi),
+    #          wvaxhi = case_when(name == "Baseline" ~ NA,
+    #                             TRUE ~ wvaxhi)) %>% 
+    #   ggplot(aes(x = time, y = value*100)) +
+    #   geom_ribbon(aes(ymin = wvaxlo*100, ymax = wvaxhi*100, fill = factor(name, labels = c("With vaccination", "Baseline"), levels = c("With vaccination", "Baseline"))), alpha = .5)
+    # } else {
+      pivot_longer( c(Baseline, "With vaccination")) %>%
+      ggplot(aes(x = time, y = value*100)) +
+    # }} +
+    geom_line(aes(color = factor(name, labels = c("With vaccination", "Baseline"), levels = c("With vaccination", "Baseline"))), linewidth = 3) +
     scale_color_manual(name = "", values=c("lightsteelblue", "steelblue"))+
+    # scale_fill_manual(name = "", values=c("lightsteelblue", NA))+
     scale_linewidth_manual(name = "")+
     theme(text = element_text(size = 18)) +
     labs(y = "Incidence per 100,000", x = "Days")
@@ -211,8 +254,17 @@ graph <- graph %>%
 render_graph(graph, layout = "fr", width = 350, height = 350)
 ```
 
-### Reproductive number {data-height=125}
+### Basic reproductive number {data-height=125}
 
-$$
-R_{0} = \ \ \ \ \  \ \ \ \ \ \  \ \ \ \ \ \ \alpha\ \ \ \ \ \ \  \ \ \ \ \ *\ \ \ \ \ \ \  \ \ \ \ \  1/\gamma \  \ \ \ \ \ \ \ \ \ \ * \ \ \ \ \ \  \ \ \ \ \ \beta \\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ Contact\ rate \ \ \ \ \ Infection\ duration \ \ \ \ \ \ Transmission\ probability
-$$
+<!-- $$ -->
+<!-- R_{0} = \ \ \ \ \  \ \ \ \ \ \  \ \ \ \ \ \ \alpha\ \ \ \ \ \ \  \ \ \ \ \ *\ \ \ \ \ \ \  \ \ \ \ \  1/\gamma \  \ \ \ \ \ \ \ \ \ \ * \ \ \ \ \ \  \ \ \ \ \ \beta \\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ Contact\ rate \ \ \ \ \ Infection\ duration \ \ \ \ \ \ Transmission\ probability -->
+<!-- $$ -->
+
+```{r}
+output$myMathText <- renderUI({
+  val <- .75 * input$input_reco * input$input_trans
+  withMathJax(HTML(paste0("$$R_{0} = ", val, "$$")))
+})
+
+uiOutput("myMathText")
+```
