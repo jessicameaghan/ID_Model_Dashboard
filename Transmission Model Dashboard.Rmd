@@ -20,7 +20,7 @@ colorsset <- c("lightsteelblue", "indianred4", "slateblue1")
 
 ## Inputs {.sidebar}
 
-This dashboard simulates the progression of a disease in a population using a **S**usceptible-**I**nfected-**R**ecovered-**S**usceptible deterministic ordinary differential equation model. Adjust the parameters below based on literature, prior knowledge, or data.
+This dashboard is a **learning tool** which simulates the progression of a disease in a population using a **S**usceptible-**I**nfected-**R**ecovered-**S**usceptible deterministic ordinary differential equation model. Adjust the parameters below based on literature, prior knowledge, or data.
 
 
 ```{r}
