@@ -158,28 +158,12 @@ renderPlot({
 ```{r}
 #make vaccination a difference color!!!
 renderPlot({
-  reactiveData()%>% 
+  reactiveData()%>%
     mutate("With vaccination" = pmax(diff(c(0, I)), 0),
-            Baseline = pmax(diff(c(0, base)), 0), 
-            index = 1:n()) %>% 
-    # {if(isTRUE(input$ui)){
-    #   mutate(., wvaxlo = pmax(diff(c(0, low_I)), 0),
-    #          wvaxhi = pmax(diff(c(0, hi_I)), 0)) %>%
-    #   pivot_longer(c(Baseline, "With vaccination")) %>%
-    #   mutate(wvaxlo = case_when(value < wvaxlo ~ value,
-    #                             TRUE ~ wvaxlo),
-    #          wvaxlo = case_when(name == "Baseline" ~ NA, # for some reason this is only working when done in two separate steps.
-    #                             TRUE ~ wvaxlo),
-    #          wvaxhi = case_when(value > wvaxhi ~ value,
-    #                             TRUE ~ wvaxhi),
-    #          wvaxhi = case_when(name == "Baseline" ~ NA,
-    #                             TRUE ~ wvaxhi)) %>% 
-    #   ggplot(aes(x = time, y = value*100)) +
-    #   geom_ribbon(aes(ymin = wvaxlo*100, ymax = wvaxhi*100, fill = factor(name, labels = c("With vaccination", "Baseline"), levels = c("With vaccination", "Baseline"))), alpha = .5)
-    # } else {
+            Baseline = pmax(diff(c(0, base)), 0),
+            index = 1:n()) %>%
       pivot_longer( c(Baseline, "With vaccination")) %>%
       ggplot(aes(x = time, y = value*100)) +
-    # }} +
     geom_line(aes(color = factor(name, labels = c("With vaccination", "Baseline"), levels = c("With vaccination", "Baseline"))), linewidth = 3) +
     scale_color_manual(name = "", values=c("lightsteelblue", "steelblue"))+
     # scale_fill_manual(name = "", values=c("lightsteelblue", NA))+
@@ -262,7 +246,7 @@ render_graph(graph, layout = "fr", width = 350, height = 350)
 
 ```{r}
 output$myMathText <- renderUI({
-  val <- .75 * input$input_reco * input$input_trans
+  val <- 15 * input$input_trans*input$input_reco #AVERAGE OF 15 CONTACTS PER DAY
   withMathJax(HTML(paste0("$$R_{0} = ", val, "$$")))
 })
 
