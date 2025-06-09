@@ -94,18 +94,6 @@ reactiveData <- reactive({
 
   # Add random noise if uncertainty is desired - will just add noise to the transmission probability since least likely to be known
   if(isTRUE(ui)){
-    # Was adding random noise to the parameters and then rerunning but the intervals were crossing over the point estimate and not making sense so simplified
-    # datslow = data.frame(ode(initial_state, times, SIRS, parms = c(trans = pmax(trans - noiz,0), 
-    #                                                                reco = pmax(reco - noiz,0), 
-    #                                                                vax, 
-    #                                                                wane = pmax(wane - noiz,0)))) %>%
-    #   dplyr::rename_with(~ paste0("low_", .))
-    # datshi = data.frame(ode(initial_state, times, SIRS, parms = c(trans = pmin(trans + noiz, 1), 
-    #                                                               reco = pmin(reco + noiz, 1), 
-    #                                                               vax, 
-    #                                                               wane = pmin(wane + noiz, 1)))) %>%
-    #   dplyr::rename_with(~ paste0("hi_", .))
-    # dats <- cbind(dats, datslow, datshi)
     dats <- dats %>% 
       mutate(across(c(S, I ,R), ~pmax(. - noiz, 0), .names = "low_{.col}"),
              across(c(S, I ,R), ~pmin(. + noiz,1), .names = "hi_{.col}"))
@@ -156,17 +144,17 @@ renderPlot({
 ### New cases without and with vaccination
 
 ```{r}
-#make vaccination a difference color!!!
 renderPlot({
   reactiveData()%>%
     mutate("With vaccination" = pmax(diff(c(0, I)), 0),
             Baseline = pmax(diff(c(0, base)), 0),
-            index = 1:n()) %>%
+            index = 1:n(),
+           "With vaccination" = ifelse(index == 1, NA, `With vaccination`),
+           Baseline = ifelse(index == 1, NA, Baseline)) %>%  # make the first value of incidence 0 and not what the prevalence was) 
       pivot_longer( c(Baseline, "With vaccination")) %>%
       ggplot(aes(x = time, y = value*100)) +
     geom_line(aes(color = factor(name, labels = c("With vaccination", "Baseline"), levels = c("With vaccination", "Baseline"))), linewidth = 3) +
     scale_color_manual(name = "", values=c("lightsteelblue", "steelblue"))+
-    # scale_fill_manual(name = "", values=c("lightsteelblue", NA))+
     scale_linewidth_manual(name = "")+
     theme(text = element_text(size = 18)) +
     labs(y = "Incidence per 100,000", x = "Days")
@@ -181,15 +169,7 @@ Column
 
 ```{r}
 library(tidyverse)
-# renderPlot({
-#   ggplot(reactiveData() %>% mutate(across(-Time, ~cumsum(.))) %>% pivot_longer(-Time), aes(x = Time)) +
-#       geom_area(aes(y = value, fill = name), position = "stack") +
-#       xlab("Time") +
-#       ylab("People") +
-#       scale_fill_manual(name = "", values=c(colorsset))+
-#       scale_linewidth_manual(name = "") +
-#         theme(text = element_text(size = 18))
-# })
+
 renderPlot({
   pdat <- reactiveData() %>% 
     summarise("With vaccination" = pmax(diff(c(0, I)), 0),
@@ -239,10 +219,6 @@ render_graph(graph, layout = "fr", width = 350, height = 350)
 ```
 
 ### Basic reproductive number {data-height=125}
-
-<!-- $$ -->
-<!-- R_{0} = \ \ \ \ \  \ \ \ \ \ \  \ \ \ \ \ \ \alpha\ \ \ \ \ \ \  \ \ \ \ \ *\ \ \ \ \ \ \  \ \ \ \ \  1/\gamma \  \ \ \ \ \ \ \ \ \ \ * \ \ \ \ \ \  \ \ \ \ \ \beta \\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ Contact\ rate \ \ \ \ \ Infection\ duration \ \ \ \ \ \ Transmission\ probability -->
-<!-- $$ -->
 
 ```{r}
 output$myMathText <- renderUI({
